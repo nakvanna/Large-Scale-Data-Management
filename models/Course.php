@@ -15,7 +15,6 @@ function getAvailableCourses($conn)
             c.course_id,
             c.name,
             c.capacity
-        HAVING COUNT(r.id) < c.capacity
         ORDER BY c.course_id
     ";
 
