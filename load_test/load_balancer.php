@@ -1,52 +1,141 @@
 <?php
 
-// App Server nodes
+// ============================================================
+// App Server Nodes
+// ============================================================
+
 $nodes = [
     "http://localhost:8080/Large-Scale-Data-Management/actions/register.php",
     "http://localhost:8081/Large-Scale-Data-Management/actions/register.php"
 ];
 
-// Get request number from baseline_test case request = 1 when we manual register via webpage 
+
+// ============================================================
+// Get request number
+//
+// Baseline test sends:
+// request = 1, 2, 3, ...
+//
+// Manual registration doesn't send request,
+// so we use 1.
+// ============================================================
+
 $request = isset($_POST["request"])
     ? (int) $_POST["request"]
     : 1;
 
-// Round Robin
-$nodeIndex = ($request - 1) % count($nodes);
 
-// Which nodes are used?
-$url = $nodes[$nodeIndex];
-// $url = $nodes[0];
+// ============================================================
+// Round Robin Load Balancing
+// ============================================================
 
+$nodeIndex =
+    ($request - 1)
+    % count($nodes);
+
+
+// Selected App Server
+
+$url =
+    $nodes[$nodeIndex];
+
+
+// ============================================================
 // Get registration data
-$student_id = $_POST["student_id"];
-$course_id = $_POST["course_id"];
+// ============================================================
 
+$student_id =
+    $_POST["student_id"];
+
+$course_id =
+    $_POST["course_id"];
+
+
+// ============================================================
+// Get test mode
+//
+// Load test:
+//     test_mode = 1
+//
+// Manual registration:
+//     test_mode doesn't exist
+// ============================================================
+
+$test_mode =
+    isset($_POST["test_mode"])
+    ? $_POST["test_mode"]
+    : 0;
+
+
+// ============================================================
 // Send request to selected App Server
-$ch = curl_init($url);
+// ============================================================
 
-curl_setopt($ch, CURLOPT_POST, true);
+$ch =
+    curl_init($url);
 
-curl_setopt($ch, CURLOPT_POSTFIELDS, [
-    "student_id" => $student_id,
-    "course_id" => $course_id
-]);
 
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt(
+    $ch,
+    CURLOPT_POST,
+    true
+);
 
-curl_setopt($ch, CURLOPT_TIMEOUT, 30);
 
+// IMPORTANT:
+// Forward test_mode to register.php
+curl_setopt(
+    $ch,
+    CURLOPT_POSTFIELDS,
+    [
+        "student_id" => $student_id,
+        "course_id"  => $course_id,
+        "test_mode"  => $test_mode
+    ]
+);
+
+
+curl_setopt(
+    $ch,
+    CURLOPT_RETURNTRANSFER,
+    true
+);
+
+
+curl_setopt(
+    $ch,
+    CURLOPT_TIMEOUT,
+    30
+);
+
+
+// ============================================================
 // Execute request
-$response = curl_exec($ch);
+// ============================================================
 
-// Check error
+$response =
+    curl_exec($ch);
+
+
+// ============================================================
+// Check cURL error
+// ============================================================
+
 if (curl_errno($ch)) {
+
     echo "FAILED";
+
 } else {
-    echo $response;
+
+    // Return exactly what register.php returns
+    echo trim($response);
 }
 
+
+// ============================================================
 // Close cURL
+// ============================================================
+
 curl_close($ch);
 
 ?>
