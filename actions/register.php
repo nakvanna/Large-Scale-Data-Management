@@ -6,29 +6,38 @@ require_once "../config/database.php";
 require_once "../models/Registration.php";
 
 
-// ==================================================
-// 1. Check request
-// ==================================================
+// ============================================================
+// Check authentication
+// ============================================================
 
 if (
-    !isset($_SESSION["student"]) &&
+    !isset($_SESSION["student"])
+    &&
     !isset($_POST["student_id"])
 ) {
+
     header("Location: ../pages/login.php");
     exit;
 }
 
 
-// ==================================================
-// 2. Start measuring response time
-// ==================================================
+// ============================================================
+// Start response timer
+// ============================================================
 
 $startTime = microtime(true);
 
 
-// ==================================================
-// 3. Get student ID
-// ==================================================
+// ============================================================
+// Get course ID
+// ============================================================
+
+$course_id = $_POST["course_id"];
+
+
+// ============================================================
+// Get student ID
+// ============================================================
 
 if (isset($_POST["student_id"])) {
 
@@ -38,96 +47,161 @@ if (isset($_POST["student_id"])) {
 } else {
 
     // Normal browser registration
-    $student_id = $_SESSION["student"]["student_id"];
+    $student = $_SESSION["student"];
+
+    $student_id = $student["student_id"];
 }
 
 
-// ==================================================
-// 4. Get course ID
-// ==================================================
-
-if (!isset($_POST["course_id"])) {
-
-    echo "FAILED";
-    exit;
-}
-
-$course_id = $_POST["course_id"];
-
-
-// ==================================================
-// 5. Connect to database
-// ==================================================
+// ============================================================
+// Connect database
+// ============================================================
 
 $conn = getConnection();
 
 
-// ==================================================
-// 6. Registration process
-// ==================================================
+// ============================================================
+// Default result
+// ============================================================
 
 $success = false;
 $message = "";
 
-// Check duplicate registration
-if (isAlreadyRegistered(
-    $conn,
-    $student_id,
-    $course_id
-)) {
 
-    $message = "<h3 style='color: red'>You already registered for this course.</h3>";
+// ============================================================
+// START TRANSACTION
+// ============================================================
 
-} else {
+$conn->begin_transaction();
 
-    // Get course information
-    $course = getCourseAvailability(
-        $conn,
-        $course_id
-    );
 
-    // Course doesn't exist
+try {
+
+    // ========================================================
+    // 1. LOCK THE COURSE FIRST
+    // ========================================================
+    //
+    // This is the most important part.
+    //
+    // Requests for the same course must wait for each other.
+    //
+    // ========================================================
+
+    $course =
+        getCourseAvailabilityForUpdate(
+            $conn,
+            $course_id
+        );
+
+
+    // ========================================================
+    // 2. Check whether course exists
+    // ========================================================
+
     if (!$course) {
 
-        $message = "Course does not exist.";
+        $message =
+            "Course does not exist.";
+
+        $conn->rollback();
+
 
     } else {
 
-        // Check capacity
+
+        // ====================================================
+        // 3. Check duplicate registration
+        // ====================================================
+
         if (
-            $course["registered"]
-            >=
-            $course["capacity"]
+            isAlreadyRegistered(
+                $conn,
+                $student_id,
+                $course_id
+            )
         ) {
 
-            $message = "Sorry, this course is full.";
+            $message =
+                "You already registered for this course.";
+
+            $conn->rollback();
+
 
         } else {
 
-            // Register student
+
+            // =================================================
+            // 4. Check course capacity
+            // =================================================
+
             if (
-                registerStudent(
-                    $conn,
-                    $student_id,
-                    $course_id
-                )
+                $course["registered"]
+                >=
+                $course["capacity"]
             ) {
 
-                $success = true;
-                $message = "Registration successful.";
+                $message =
+                    "Sorry, this course is full.";
+
+                $conn->rollback();
+
 
             } else {
 
-                $message = "Registration failed.";
+
+                // =============================================
+                // 5. Register student
+                // =============================================
+
+                if (
+                    registerStudent(
+                        $conn,
+                        $student_id,
+                        $course_id
+                    )
+                ) {
+
+                    // =========================================
+                    // 6. COMMIT
+                    // =========================================
+
+                    $conn->commit();
+
+                    $success = true;
+
+                    $message =
+                        "Registration successful.";
+
+                } else {
+
+                    $message =
+                        "Registration failed.";
+
+                    $conn->rollback();
+                }
             }
         }
     }
+
+
+} catch (Throwable $e) {
+
+    // ========================================================
+    // Something went wrong
+    // ========================================================
+
+    $conn->rollback();
+
+    $success = false;
+
+    $message =
+        "Registration failed.";
 }
 
 
-// ==================================================
-// 7. Calculate response time
-// ==================================================
+// ============================================================
+// Calculate response time
+// ============================================================
 
 $endTime = microtime(true);
 
@@ -135,52 +209,39 @@ $responseTime =
     ($endTime - $startTime) * 1000;
 
 
-// ==================================================
-// 8. Get final registration count
-//    ONLY for the tested course
-// ==================================================
+// ============================================================
+// AUTOMATED LOAD TEST RESPONSE
+// ============================================================
 
-$sql = "
-    SELECT COUNT(*) AS total
-    FROM tbl_registrations
-    WHERE course_id = ?
-";
+if (
+    isset($_POST["test_mode"])
+    &&
+    $_POST["test_mode"] == "1"
+) {
 
-$stmt = $conn->prepare($sql);
-
-$stmt->bind_param("s", $course_id);
-
-$stmt->execute();
-
-$result = $stmt->get_result();
-
-$row = $result->fetch_assoc();
-
-$finalRegistrationCount = (int) $row["total"];
-
-$stmt->close();
-
-// ==================================================
-// 9. Return machine-readable result
-// ==================================================
-
-if (isset($_POST["test_mode"]) && $_POST["test_mode"] == 1) {
-
-    // Response for baseline_test.php
     if ($success) {
+
         echo "SUCCESS";
+
     } else {
+
         echo "FAILED";
     }
 
+
+// ============================================================
+// NORMAL BROWSER RESPONSE
+// ============================================================
+
 } else {
-    // Response for normal browser
+
     echo $message;
 }
 
-// ==================================================
-// 10. Close connection
-// ==================================================
+
+// ============================================================
+// Close connection
+// ============================================================
 
 $conn->close();
 
