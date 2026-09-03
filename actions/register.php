@@ -69,7 +69,6 @@ $conn = getConnection();
 $success = false;
 $message = "";
 
-
 // Check duplicate registration
 if (isAlreadyRegistered(
     $conn,
@@ -77,7 +76,7 @@ if (isAlreadyRegistered(
     $course_id
 )) {
 
-    $message = "You already registered for this course.";
+    $message = "<h3 style='color: red'>You already registered for this course.</h3>";
 
 } else {
 
@@ -86,7 +85,6 @@ if (isAlreadyRegistered(
         $conn,
         $course_id
     );
-
 
     // Course doesn't exist
     if (!$course) {
@@ -150,10 +148,7 @@ $sql = "
 
 $stmt = $conn->prepare($sql);
 
-$stmt->bind_param(
-    "s",
-    $course_id
-);
+$stmt->bind_param("s", $course_id);
 
 $stmt->execute();
 
@@ -161,25 +156,27 @@ $result = $stmt->get_result();
 
 $row = $result->fetch_assoc();
 
-$finalRegistrationCount =
-    (int) $row["total"];
+$finalRegistrationCount = (int) $row["total"];
 
 $stmt->close();
-
 
 // ==================================================
 // 9. Return machine-readable result
 // ==================================================
 
-if ($success) {
+if (isset($_POST["test_mode"]) && $_POST["test_mode"] == 1) {
 
-    echo "SUCCESS";
+    // Response for baseline_test.php
+    if ($success) {
+        echo "SUCCESS";
+    } else {
+        echo "FAILED";
+    }
 
 } else {
-
-    echo "FAILED";
+    // Response for normal browser
+    echo $message;
 }
-
 
 // ==================================================
 // 10. Close connection
