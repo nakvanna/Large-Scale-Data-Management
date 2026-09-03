@@ -40,7 +40,11 @@ $courses = getAvailableCourses($conn);
     <?php echo htmlspecialchars($student_gender); ?>
 </p>
 
+<br>
 
+<a href="my_registrations.php">
+    View My Registrations
+</a>
 <form method="POST" action="../actions/register.php">
 
     <input

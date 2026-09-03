@@ -60,3 +60,27 @@ function registerStudent($conn, $student_id, $course_id)
 
     return $stmt->execute();
 }
+
+function getStudentRegistrations($conn, $student_id)
+{
+    $sql = "
+        SELECT
+            r.id,
+            r.course_id,
+            c.name,
+            r.registered_at
+        FROM tbl_registrations r
+        JOIN tbl_courses c
+            ON r.course_id = c.course_id
+        WHERE r.student_id = ?
+        ORDER BY r.registered_at DESC
+    ";
+
+    $stmt = $conn->prepare($sql);
+
+    $stmt->bind_param("s", $student_id);
+
+    $stmt->execute();
+
+    return $stmt->get_result();
+}
