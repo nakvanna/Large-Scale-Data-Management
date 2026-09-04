@@ -54,8 +54,7 @@ $courses = getAvailableCourses($conn);
     >
 
     <h3>Available Courses</h3>
-
-    <?php while ($course = $courses->fetch_assoc()): ?>
+    <?php foreach ($courses as $course): ?>
 
         <div>
 
@@ -79,7 +78,7 @@ $courses = getAvailableCourses($conn);
 
         </div>
 
-    <?php endwhile; ?>
+    <?php endforeach; ?>
 
     <br>
 
