@@ -2,38 +2,21 @@
 
 session_start();
 
+require_once "../config/shard_database.php";
 require_once "../config/database.php";
 require_once "../models/Registration.php";
 
-
 // ============================================================
-// Check authentication
+// Check login
 // ============================================================
 
 if (
     !isset($_SESSION["student"])
-    &&
-    !isset($_POST["student_id"])
+    && !isset($_POST["student_id"])
 ) {
-
     header("Location: ../pages/login.php");
     exit;
 }
-
-
-// ============================================================
-// Start response timer
-// ============================================================
-
-$startTime = microtime(true);
-
-
-// ============================================================
-// Get course ID
-// ============================================================
-
-$course_id = $_POST["course_id"];
-
 
 // ============================================================
 // Get student ID
@@ -41,131 +24,253 @@ $course_id = $_POST["course_id"];
 
 if (isset($_POST["student_id"])) {
 
-    // Load testing
     $student_id = $_POST["student_id"];
 
 } else {
 
-    // Normal browser registration
-    $student = $_SESSION["student"];
-
-    $student_id = $student["student_id"];
+    $student_id =
+        $_SESSION["student"]["student_id"];
 }
 
+// ============================================================
+// Get course ID
+// ============================================================
+
+if (!isset($_POST["course_id"])) {
+
+    echo "FAILED";
+    exit;
+}
+
+$course_id = $_POST["course_id"];
 
 // ============================================================
-// Connect database
+// Determine student's database shard
+//
+// S001-S250 -> DB1 :3306
+// S251-S500 -> DB2 :3307
 // ============================================================
 
-$conn = getConnection();
+$shardConn =
+    getShardConnection($student_id);
 
+if ($shardConn === null) {
+
+    echo "FAILED";
+    exit;
+}
 
 // ============================================================
-// Default result
+// GLOBAL DATABASE
+//
+// DB1 :3306 is the global capacity authority.
 // ============================================================
+
+$globalConn = new mysqli(
+    "127.0.0.1",
+    "root",
+    "",
+    "university_db",
+    3306
+);
+
+if ($globalConn->connect_error) {
+
+    echo "FAILED";
+
+    $shardConn->close();
+
+    exit;
+}
+
+// ============================================================
+// Determine whether student's shard is DB1
+// ============================================================
+
+$studentNumber = (int) substr($student_id, 1);
+
+$isDB1 = ($studentNumber <= 250);
+
+// ============================================================
+// If student belongs to DB1,
+// use the same connection.
+//
+// This avoids two connections fighting over the
+// same DB1 transaction/locks.
+// ============================================================
+
+if ($isDB1) {
+
+    $registrationConn = $globalConn;
+
+} else {
+
+    $registrationConn = $shardConn;
+}
+
+// ============================================================
+// Start GLOBAL transaction on DB1
+// ============================================================
+
+$globalConn->begin_transaction();
 
 $success = false;
 $message = "";
 
-
 // ============================================================
-// START TRANSACTION
+// Lock the GLOBAL course lock row
+//
+// This is the critical FOR UPDATE.
+//
+// Every request for C001 must wait here if another
+// request is already processing C001.
 // ============================================================
 
-$conn->begin_transaction();
+$course =
+    lockCourse(
+        $globalConn,
+        $course_id
+    );
 
+if (!$course) {
 
-try {
+    $message =
+        "Course does not exist.";
+
+    $globalConn->rollback();
+
+} else {
 
     // ========================================================
-    // 1. LOCK THE COURSE FIRST
-    // ========================================================
+    // Check duplicate registration
     //
-    // This is the most important part.
-    //
-    // Requests for the same course must wait for each other.
-    //
+    // Do this after acquiring the global lock.
     // ========================================================
 
-    $course =
-        getCourseAvailabilityForUpdate(
-            $conn,
+    if (
+        isAlreadyRegistered(
+            $registrationConn,
+            $student_id,
             $course_id
-        );
-
-
-    // ========================================================
-    // 2. Check whether course exists
-    // ========================================================
-
-    if (!$course) {
+        )
+    ) {
 
         $message =
-            "Course does not exist.";
+            "You already registered for this course.";
 
-        $conn->rollback();
-
+        $globalConn->rollback();
 
     } else {
 
-
         // ====================================================
-        // 3. Check duplicate registration
+        // Count registrations on DB1
         // ====================================================
 
-        if (
-            isAlreadyRegistered(
-                $conn,
-                $student_id,
+        $registeredDB1 =
+            countCourseRegistrations(
+                $globalConn,
                 $course_id
-            )
-        ) {
+            );
 
-            $message =
-                "You already registered for this course.";
+        // ====================================================
+        // Count registrations on DB2
+        // ====================================================
 
-            $conn->rollback();
+        if ($isDB1) {
 
+            // Student is on DB1.
+            // Need another connection to read DB2.
+
+            $db2Conn = new mysqli(
+                "127.0.0.1",
+                "root",
+                "",
+                "university_db",
+                3307
+            );
+
+            if ($db2Conn->connect_error) {
+
+                $message =
+                    "Database Node 2 connection failed.";
+
+                $globalConn->rollback();
+
+            } else {
+
+                $registeredDB2 =
+                    countCourseRegistrations(
+                        $db2Conn,
+                        $course_id
+                    );
+            }
 
         } else {
 
+            // Student is already on DB2.
+            // Reuse the student's DB2 connection.
+
+            $db2Conn = $shardConn;
+
+            $registeredDB2 =
+                countCourseRegistrations(
+                    $db2Conn,
+                    $course_id
+                );
+        }
+
+        // ====================================================
+        // Continue only if DB2 count was successfully obtained
+        // ====================================================
+
+        if (
+            isset($registeredDB2)
+            && $globalConn->errno === 0
+        ) {
 
             // =================================================
-            // 4. Check course capacity
+            // Calculate GLOBAL registration count
+            // =================================================
+
+            $totalRegistered =
+                $registeredDB1
+                +
+                $registeredDB2;
+
+            // =================================================
+            // Check GLOBAL capacity
             // =================================================
 
             if (
-                $course["registered"]
+                $totalRegistered
                 >=
-                $course["capacity"]
+                (int) $course["capacity"]
             ) {
 
                 $message =
                     "Sorry, this course is full.";
 
-                $conn->rollback();
-
+                $globalConn->rollback();
 
             } else {
 
-
                 // =============================================
-                // 5. Register student
+                // Insert into student's own shard
                 // =============================================
 
                 if (
                     registerStudent(
-                        $conn,
+                        $registrationConn,
                         $student_id,
                         $course_id
                     )
                 ) {
 
                     // =========================================
-                    // 6. COMMIT
+                    // Registration successful
                     // =========================================
 
-                    $conn->commit();
+                    $globalConn->commit();
 
                     $success = true;
 
@@ -177,47 +282,39 @@ try {
                     $message =
                         "Registration failed.";
 
-                    $conn->rollback();
+                    $globalConn->rollback();
                 }
             }
         }
     }
 
-
-} catch (Throwable $e) {
-
     // ========================================================
-    // Something went wrong
+    // Close separate DB2 connection
     // ========================================================
 
-    $conn->rollback();
+    if (
+        $isDB1
+        && isset($db2Conn)
+        && $db2Conn !== $shardConn
+    ) {
 
-    $success = false;
-
-    $message =
-        "Registration failed.";
+        $db2Conn->close();
+    }
 }
 
-
 // ============================================================
-// Calculate response time
-// ============================================================
-
-$endTime = microtime(true);
-
-$responseTime =
-    ($endTime - $startTime) * 1000;
-
-
-// ============================================================
-// AUTOMATED LOAD TEST RESPONSE
+// Response
+//
+// baseline_test.php sends test_mode=1.
+// Manual registration does not.
 // ============================================================
 
-if (
+$test_mode =
     isset($_POST["test_mode"])
-    &&
-    $_POST["test_mode"] == "1"
-) {
+    ? (int) $_POST["test_mode"]
+    : 0;
+
+if ($test_mode === 1) {
 
     if ($success) {
 
@@ -228,21 +325,20 @@ if (
         echo "FAILED";
     }
 
-
-// ============================================================
-// NORMAL BROWSER RESPONSE
-// ============================================================
-
 } else {
 
     echo $message;
 }
 
-
 // ============================================================
-// Close connection
+// Close connections
 // ============================================================
 
-$conn->close();
+if ($registrationConn !== $globalConn) {
+
+    $shardConn->close();
+}
+
+$globalConn->close();
 
 ?>

@@ -1,8 +1,7 @@
 <?php
 
-
 // ============================================================
-// Check whether a student is already registered
+// Check duplicate registration on the student's shard
 // ============================================================
 
 function isAlreadyRegistered(
@@ -31,41 +30,41 @@ function isAlreadyRegistered(
 
     $result = $stmt->get_result();
 
-    $exists = ($result->num_rows > 0);
+    $exists = $result->num_rows > 0;
 
     $stmt->close();
 
     return $exists;
 }
 
-
 // ============================================================
-// Get course availability
-// Normal version - no lock
+// Lock GLOBAL course
+//
+// DB Node 1 :3306 is the global capacity authority.
+//
+// IMPORTANT:
+// This locks tbl_course_locks, NOT tbl_courses.
+// Every concurrent request for the same course must
+// acquire this same lock before checking capacity.
 // ============================================================
 
-function getCourseAvailability(
-    $conn,
+function lockCourse(
+    $globalConn,
     $course_id
 ) {
 
     $sql = "
         SELECT
-            c.course_id,
-            c.name,
-            c.capacity,
-            COUNT(r.id) AS registered
-        FROM tbl_courses c
-        LEFT JOIN tbl_registrations r
-            ON c.course_id = r.course_id
-        WHERE c.course_id = ?
-        GROUP BY
-            c.course_id,
-            c.name,
+            l.course_id,
             c.capacity
+        FROM tbl_course_locks l
+        JOIN tbl_courses c
+            ON l.course_id = c.course_id
+        WHERE l.course_id = ?
+        FOR UPDATE
     ";
 
-    $stmt = $conn->prepare($sql);
+    $stmt = $globalConn->prepare($sql);
 
     $stmt->bind_param(
         "s",
@@ -83,56 +82,14 @@ function getCourseAvailability(
     return $course;
 }
 
-
 // ============================================================
-// Get course availability WITH row lock
+// Count registrations on one shard
 // ============================================================
 
-function getCourseAvailabilityForUpdate(
+function countCourseRegistrations(
     $conn,
     $course_id
 ) {
-
-    // --------------------------------------------------------
-    // Lock the course row
-    // --------------------------------------------------------
-
-    $sql = "
-        SELECT
-            course_id,
-            name,
-            capacity
-        FROM tbl_courses
-        WHERE course_id = ?
-        FOR UPDATE
-    ";
-
-    $stmt = $conn->prepare($sql);
-
-    $stmt->bind_param(
-        "s",
-        $course_id
-    );
-
-    $stmt->execute();
-
-    $result = $stmt->get_result();
-
-    $course = $result->fetch_assoc();
-
-    $stmt->close();
-
-
-    // Course doesn't exist
-    if (!$course) {
-        return null;
-    }
-
-
-    // --------------------------------------------------------
-    // Count current registrations
-    // The course row is still locked here.
-    // --------------------------------------------------------
 
     $sql = "
         SELECT COUNT(*) AS registered
@@ -155,12 +112,7 @@ function getCourseAvailabilityForUpdate(
 
     $stmt->close();
 
-
-    $course["registered"] =
-        (int) $row["registered"];
-
-
-    return $course;
+    return (int) $row["registered"];
 }
 
 
@@ -197,6 +149,40 @@ function registerStudent(
     $stmt->close();
 
     return $success;
+}
+
+
+// ============================================================
+// Get student's registrations
+// ============================================================
+
+function getStudentRegistrations(
+    $conn,
+    $student_id
+) {
+
+    $sql = "
+        SELECT
+            r.course_id,
+            c.name,
+            r.registered_at
+        FROM tbl_registrations r
+        JOIN tbl_courses c
+            ON r.course_id = c.course_id
+        WHERE r.student_id = ?
+        ORDER BY r.registered_at DESC
+    ";
+
+    $stmt = $conn->prepare($sql);
+
+    $stmt->bind_param(
+        "s",
+        $student_id
+    );
+
+    $stmt->execute();
+
+    return $stmt->get_result();
 }
 
 ?>
