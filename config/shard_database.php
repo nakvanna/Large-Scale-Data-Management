@@ -8,17 +8,14 @@ function getShardConnection($student_id)
 
     // Determine database node
     if ($student_number >= 1 && $student_number <= 250) {
-
         // DB Node 1
         $port = 3306;
 
     } elseif ($student_number >= 251 && $student_number <= 500) {
-
         // DB Node 2
         $port = 3307;
 
     } else {
-
         return null;
     }
 

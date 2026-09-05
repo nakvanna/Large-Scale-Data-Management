@@ -18,7 +18,6 @@ function getAvailableCourses($conn)
         return false;
     }
 
-
     // Connect to DB Node 2
     $db2 = new mysqli(
         "127.0.0.1",
@@ -100,9 +99,7 @@ function getAvailableCourses($conn)
         $courses[] = $course;
     }
 
-
     $db2->close();
-
 
     // Return array instead of mysqli_result
     return $courses;
